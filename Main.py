@@ -1,11 +1,16 @@
-import time
+# Imports
+import time, os, stat
+import threading
+import glob
 import math
-import os
 import grovepi
-from picamera import PiCamera
 from grovepi import *
-#from firebase import firebase
-from firebase.firebase import FirebaseApplication, FirebaseAuthentication
+from picamera import PiCamera
+from firebase.firebase import FirebaseApplication, FirebaseAuthentication  # authentication & realtime database
+from google.cloud import storage  # uploading images
+from PIL import Image # reducing size of images prior to upload
+
+# i/o definitions
 
 # Digital
 temp_humidity_port	= 4
@@ -17,7 +22,10 @@ ultasonic_port = 5
 pinMode(led_green_port, "OUTPUT")
 pinMode(led_red_port, "OUTPUT")
 
-# Return the path to the archive folder
+###########################################
+# LOCAL FUNCTIONS
+
+# Return the path to the folder
 # And create it if it doesn't exist
 # os.path methods used from https://docs.python.org/2/library/os.path.html
 def get_folder(folder_name):
@@ -56,8 +64,7 @@ def read_sensor():
     except IOError as TypeError:
         return [-1,-1]
 
-# Firebase uploads
-# Sensor readings
+# Upload Sensor readings
 def upload_sensor_readings(temperature, humidity):
     # Construct the data to send to Firebase
     # Use epock time as the key
@@ -73,7 +80,7 @@ def upload_sensor_readings(temperature, humidity):
     
     return result
 
-# Culboard Culprits
+# Upload Culboard Culprits
 def upload_culprit(imageName):
     # Construct the data to send to Firebase
     # Use epock time as the key
@@ -89,35 +96,120 @@ def upload_culprit(imageName):
     
     return result
 
+# Process the image
+# - create temporary copy of image at a reduced size
+# - upload smaller image to google cloud
+# - delete temporary file
+# - move original to archive
+def process_image(imagePath):
+    # Log
+    print("Processing image: " + imagePath)
+    
+    # Create a path for the redcued image
+    extension = imagePath.split(".")[1]
+    fileName = imagePath.split("/")[-1]
+    imageSmallPath = imagePath.split(".")[0] + "-small." + extension
+    
+    # Make a copy of the image which is smaller
+    image = Image.open(imagePath)
+    image.thumbnail([500, 500], Image.ANTIALIAS)  # thumbnail maintains aspect ratio                     
+    image.save(imageSmallPath, "JPEG")
+    #print("image resized")
+    
+    # Upload the smaller file
+    imageBlob = bucket.blob(fileName)
+    imageBlob.upload_from_filename(filename=imageSmallPath)
+    #print("image uploaded")    
+    
+    # Move original to archive folder
+    os.rename(imagePath, imagePath.replace(imageFolderName, archiveFolderName))
+    #print("image moved to archive folder")
+    
+    # Delete the smaller copy just created
+    if os.path.isfile(imageSmallPath):
+        os.remove(imageSmallPath)
+        #print("temporary image (smaller) deleted")
+
+# Check if the given file is older than the maximum age
+# if so, delete it
+def delete_file_if_old(path):
+    # Get the age of the file (since modified)
+    age_in_seconds = time.time() - os.stat(path)[stat.ST_MTIME]
+    # Check if older than a week
+    delete_after_seconds = 60 * 60 * 24 * 7
+    if age_in_seconds > delete_after_seconds:
+        if os.path.isfile(path):
+            os.remove(path)
+            print("Deleted old file: " + path)
+
+# A function intended to be run as a background service
+# Checks for images in the Images folder
+# Process and archives any found
+def upload_and_archive_images():
+    
+    # Infinite loop
+    while True:
+        
+        if stop_daemons:
+            break
+        
+        print("Checking for images to upload")
+        
+        # Check for image files to upload
+        images = glob.glob(imageFolder + "/*.jpg")
+        print("Images found: " + str(len(images)))
+                
+        # Cycle through all of the images in the image folder
+        for imagePath in images:
+            
+            # Make sure we don't process any of the converted images
+            if "-small" in imagePath:
+                continue
+            
+            # Process the image
+            process_image(imagePath)            
+        
+        # Delete any old files in the archive folder        
+        archivedImages = glob.glob(archiveFolder + "/*.jpg")
+        for archivedImage in archivedImages:
+            delete_file_if_old(archivedImage)
+        
+        #Slow down the loop
+        time.sleep(time_between_checks_background)
+
+# END LOCAL FUNCTIONS
+###########################################
+
 # Variable/Object definition before entering loop
 
 # Time to wait 
 time_between_checks = 1  # main loop delay
+time_between_checks_background = 60  # delay for background loops
 time_between_sensor_reads = 5
 time_between_sensor_uploads = 30  
-time_between_image_captures = 10  # ignore multiple opens in a row  
+time_between_image_captures = 10  # ignore multiple opens in a row
 
-# Variables for door open/close
+# Last done times
+last_read_sensor = int(time.time())
+last_uploaded_readings = int(time.time())
+last_image_taken = int(time.time())
+last_background_check = int(time.time())
+
+# Variables for maindoor open/close
 open_distance = 25
 door_was_open = False
 
-# Variables/Objects for images
+# Variables for camera
 camera = PiCamera() 
-image_folder = get_folder("Images")
-
-#Save the initial time
-last_read_sensor= int(time.time())
-last_uploaded_readings= int(time.time())
-last_image_taken= int(time.time())
 
 # Variables for average readings
 # Each genuine reading between uploads will be added to this list
 # The average of the values will then be determined and uploaded
-# The  the list will be emptied
+# Then the list will be emptied
 temperatures = []
 humidities = []
 
-# Firebase
+# Firebase App
 fbApp = FirebaseApplication('https://cupboard-culprit.firebaseio.com', authentication=None) 
 
 # Firebase Authentication
@@ -125,15 +217,38 @@ authentication = FirebaseAuthentication('kS4ytUh5wSkmMJI7s39VicMqsiDn7ghOj3gDh5T
 fbApp.authentication = authentication
 print (authentication.extra)
 
+# Google Cloud
+# Enable storage, using local service account json file
+client = storage.Client.from_service_account_json('Cupboard Culprit-900bac054139.json')
+
+# The storage bucket to upload into
+bucket = client.get_bucket('cupboard-culprit.appspot.com')
+print("Images will be uploaded to bucket:")
+print(bucket)
+
+# Folders
+imageFolderName = "Images"  # vairable used to ensure same name used below
+imageFolder = get_folder(imageFolderName)
+archiveFolderName = "Archive"  # vairable used to ensure same name used below
+archiveFolder = get_folder(archiveFolderName)
+
+# Background processes
+image_processor = threading.Thread(target=upload_and_archive_images)
+stop_daemons = False  # if set to True, all daemons will exit their infinte loops on next cycle
+image_processor.daemon = True  # won't prevent the program from terminating if still runnning 
+image_processor.start()  # start the image processing function on a background thread
+
 while True:
     
     try:
+        # Get the current time        
+        curr_time_sec=int(time.time())
         
         # Check the distance
         distant = ultrasonicRead(ultasonic_port)
         #print(distant,'cm')
         
-        # Determine hether door is open or closed
+        # Determine whether door is open or closed
         door_open = False
         if distant >= open_distance:
             door_open = True
@@ -144,16 +259,13 @@ while True:
             digitalWrite(led_green_port, 1) # green on            
         
         #print("Door open: %s" % door_open)
-        
-        # Get the current time        
-        curr_time_sec=int(time.time())
-        
+                
         # Check if this is the first time the door was opened, since it was closed
         # If so, take a picture
         if door_open and not door_was_open:
             # Make sure sufficient time has passed since the previous capture
             if curr_time_sec - last_image_taken > time_between_image_captures:
-                saved_image_name = take_picture(camera, image_folder)
+                saved_image_name = take_picture(camera, imageFolderName)
                 print("Image saved: " + saved_image_name)
                 upload_culprit(saved_image_name)
             else:
@@ -167,7 +279,7 @@ while True:
         if curr_time_sec - last_read_sensor > time_between_sensor_reads:
             [temp, humidity]=read_sensor()
 
-            print(("Time:%s\nTemp: %.2f\nHumidity:%.2f %%\n" %(curr_time,temp,humidity)))
+            print(("Time:%s  Temp: %.2f  Humidity:%.2f %%" %(curr_time,temp,humidity)))
             
             # Check if readings are genuine and add to list if they are
             if temp != -1 and (temp >= 0.01 or temp <= 0.01):
@@ -198,6 +310,7 @@ while True:
                 #Update the last read time
                 last_uploaded_readings=curr_time_sec
         
+        
         #Slow down the loop
         time.sleep(time_between_checks)
         
@@ -206,8 +319,7 @@ while True:
         break
     
 # Cleanup
+stop_daemons = True
 digitalWrite(led_red_port,0)
 digitalWrite(led_green_port,0)
 camera.close
-    
-
