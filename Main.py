@@ -1,10 +1,11 @@
 # Imports
-import time, os, stat
+import time, datetime, os, stat
 import threading
 import glob
 import math
 import grovepi
 from grovepi import *
+from grove_rgb_lcd import *
 from picamera import PiCamera
 from firebase.firebase import FirebaseApplication, FirebaseAuthentication  # authentication & realtime database
 from google.cloud import storage  # uploading images
@@ -17,10 +18,12 @@ temp_humidity_port	= 4
 led_red_port = 3
 led_green_port = 2
 ultasonic_port = 5
+buzzer_port = 6
 
 # Set the pin modes
 pinMode(led_green_port, "OUTPUT")
 pinMode(led_red_port, "OUTPUT")
+pinMode(buzzer_port, "OUTPUT")
 
 ###########################################
 # LOCAL FUNCTIONS
@@ -57,7 +60,6 @@ def take_picture(camera, destination_folder):
 def read_sensor():
     try:
         [temp,humidity] = grovepi.dht(temp_humidity_port,0)  # 0 for blue sensor
-        
         return [temp,humidity]
     
     #Return -1 in case of sensor error
@@ -76,7 +78,6 @@ def upload_sensor_readings(temperature, humidity):
     
     # Log
     print("Uploading to firebase:" + str(data))
-    #print(data)
     
     return result
 
@@ -91,9 +92,8 @@ def upload_culprit(imageName):
     result = fbApp.put('/culprits', timeKey, data)
     
     # Log
-    print("Uploading to firebase:")
-    print(data)
-    
+    print("Uploading to firebase:" + str(data))
+        
     return result
 
 # Process the image
@@ -177,6 +177,16 @@ def upload_and_archive_images():
         #Slow down the loop
         time.sleep(time_between_checks_background)
 
+# Set the background colour of the display
+# based on the number of raids today
+def set_screen_background(raids):
+    if raids >= alarm_count:        
+        setRGB(255,0,0)  # red
+    elif raids >= warning_count:    
+        setRGB(255,165,0)  # orange
+    else:  
+        setRGB(0,255,0)  # green        
+
 # END LOCAL FUNCTIONS
 ###########################################
 
@@ -185,18 +195,20 @@ def upload_and_archive_images():
 # Time to wait 
 time_between_checks = 1  # main loop delay
 time_between_checks_background = 60  # delay for background loops
-time_between_sensor_reads = 5
-time_between_sensor_uploads = 30  
-time_between_image_captures = 10  # ignore multiple opens in a row
+time_between_sensor_reads = 10
+time_between_sensor_uploads = 60  
+time_between_image_captures = 60  # ignore multiple opens in a row
+time_between_display_updates = 10  # sets minimum time each message shown for
 
-# Last done times
+# Last done times (initialised to now)
 last_read_sensor = int(time.time())
 last_uploaded_readings = int(time.time())
 last_image_taken = int(time.time())
-last_background_check = int(time.time())
+last_display_update = int(time.time())
+last_date = datetime.date.today()
 
 # Variables for maindoor open/close
-open_distance = 25
+open_distance = 60  # approx 60cm deep
 door_was_open = False
 
 # Variables for camera
@@ -208,6 +220,12 @@ camera = PiCamera()
 # Then the list will be emptied
 temperatures = []
 humidities = []
+current_temperature = 0 # for displaying (init to 0, updated by avgTemp)
+
+# Variables for tracking number of culprits / day
+daily_count = 0
+warning_count = 2
+alarm_count = 4
 
 # Firebase App
 fbApp = FirebaseApplication('https://cupboard-culprit.firebaseio.com', authentication=None) 
@@ -226,7 +244,7 @@ bucket = client.get_bucket('cupboard-culprit.appspot.com')
 print("Images will be uploaded to bucket:")
 print(bucket)
 
-# Folders
+# Local Folders
 imageFolderName = "Images"  # vairable used to ensure same name used below
 imageFolder = get_folder(imageFolderName)
 archiveFolderName = "Archive"  # vairable used to ensure same name used below
@@ -238,44 +256,71 @@ stop_daemons = False  # if set to True, all daemons will exit their infinte loop
 image_processor.daemon = True  # won't prevent the program from terminating if still runnning 
 image_processor.start()  # start the image processing function on a background thread
 
+# Main Loop
 while True:
     
     try:
-        # Get the current time        
+        # Get the current day / time        
         curr_time_sec=int(time.time())
+        curr_time = time.strftime("%Y-%m-%d:%H-%M-%S")
+        curr_date = datetime.date.today()
         
-        # Check the distance
+        # Reset the daily counter if it's the next day
+        if curr_date != last_date:
+            daily_counter = 0
+        
+        # Check the distance to the cupboard door
         distant = ultrasonicRead(ultasonic_port)
         #print(distant,'cm')
         
+        # Update the display
+        if curr_time_sec - last_display_update > time_between_display_updates:
+            setText("Raids Today: %d\nTemp:%.2f " %(daily_count,current_temperature))
+            set_screen_background(daily_count)
+            last_display_update = curr_time_sec
+            
         # Determine whether door is open or closed
         door_open = False
         if distant >= open_distance:
             door_open = True
             digitalWrite(led_red_port, 1)   # red on
-            digitalWrite(led_green_port, 0) # green off
+            digitalWrite(led_green_port, 0) # green off            
         else:
             digitalWrite(led_red_port, 0)   # red off
             digitalWrite(led_green_port, 1) # green on            
+            digitalWrite(buzzer_port, 0) # buzzer off
         
         #print("Door open: %s" % door_open)
                 
         # Check if this is the first time the door was opened, since it was closed
-        # If so, take a picture
-        if door_open and not door_was_open:
+        # If so, take a picture and increment the daily count
+        if door_open and not door_was_open:                          
             # Make sure sufficient time has passed since the previous capture
-            if curr_time_sec - last_image_taken > time_between_image_captures:
+            # (also used to limit daily increments)
+            if curr_time_sec - last_image_taken > time_between_image_captures:   
+                # Increment the counter
+                daily_count += 1
+                # Buzzer on if too many opens
+                if daily_count >= alarm_count:          
+                    digitalWrite(buzzer_port, 1) # buzzer on               
+                # Update display
+                setText("Smile Fatty!\nImage captured...")
+                set_screen_background(daily_count)                
+                # Take the picture
                 saved_image_name = take_picture(camera, imageFolderName)
-                print("Image saved: " + saved_image_name)
-                upload_culprit(saved_image_name)
+                print("Image saved: " + saved_image_name)                
+                # Upload the image name and timestamp
+                upload_culprit(saved_image_name)                
+                # Remember the time 
+                last_image_taken = curr_time_sec
+                last_display_update = curr_time_sec                
             else:
-                print("Image not taken as previous image was too recent.")
+                print("Ignoring door open, too soon after previous.")
                
         # Remember door status for next time
         door_was_open = door_open
         
         # If it is time to take the sensor reading
-        curr_time = time.strftime("%Y-%m-%d:%H-%M-%S")
         if curr_time_sec - last_read_sensor > time_between_sensor_reads:
             [temp, humidity]=read_sensor()
 
@@ -285,10 +330,10 @@ while True:
             if temp != -1 and (temp >= 0.01 or temp <= 0.01):
                 temperatures.append(temp)
             if humidity != -1 and (humidity >= 0.01 or humidity <= 0.01):
-                humidities.append(humidity)
+                humidities.append(humidity)            
             
-            #Update the last read time
-            last_read_sensor=curr_time_sec
+            # Remember the time
+            last_read_sensor = curr_time_sec
         
         # Calculate and upload average if sufficient time has passed
         if curr_time_sec - last_uploaded_readings > time_between_sensor_uploads:
@@ -300,6 +345,9 @@ while True:
                 avgTemp = sum(temperatures) / len(temperatures)
                 avgHum = sum(humidities) / len(humidities)
                 
+                # Remember the average temp for dispaying
+                current_temperature = avgTemp
+                
                 # Upload to firebase
                 result = upload_sensor_readings(avgTemp, avgHum)
                 
@@ -307,9 +355,11 @@ while True:
                 temperatures = []
                 humidities = []
                 
-                #Update the last read time
-                last_uploaded_readings=curr_time_sec
+                # Remember the time
+                last_uploaded_readings = curr_time_sec
         
+        # Remember the date for next loop        
+        last_date = curr_date
         
         #Slow down the loop
         time.sleep(time_between_checks)
@@ -319,7 +369,9 @@ while True:
         break
     
 # Cleanup
+setText("")
 stop_daemons = True
-digitalWrite(led_red_port,0)
-digitalWrite(led_green_port,0)
+digitalWrite(led_red_port, 0)
+digitalWrite(led_green_port, 0)
+digitalWrite(buzzer_port, 0)    
 camera.close
