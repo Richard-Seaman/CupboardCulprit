@@ -4,7 +4,8 @@ import os
 import grovepi
 from picamera import PiCamera
 from grovepi import *
-from firebase import firebase
+#from firebase import firebase
+from firebase.firebase import FirebaseApplication, FirebaseAuthentication
 
 # Digital
 temp_humidity_port	= 4
@@ -64,7 +65,7 @@ def upload_sensor_readings(temperature, humidity):
     curr_time_sec=int(time.time())
     timeKey = int(time.time())
     data = {'timestamp': curr_time,'temperature': temperature, 'humidity': humidity}
-    result = firebase.put('/conditions', timeKey, data)
+    result = fbApp.put('/conditions', timeKey, data)
     
     # Log
     print("Uploading to firebase:" + str(data))
@@ -80,7 +81,7 @@ def upload_culprit(imageName):
     curr_time_sec=int(time.time())
     timeKey = int(time.time())
     data = {'timestamp': curr_time,'imageName': imageName}
-    result = firebase.put('/culprits', timeKey, data)
+    result = fbApp.put('/culprits', timeKey, data)
     
     # Log
     print("Uploading to firebase:")
@@ -91,10 +92,10 @@ def upload_culprit(imageName):
 # Variable/Object definition before entering loop
 
 # Time to wait 
-time_between_checks = 5  # main loop delay
-time_between_sensor_reads = 10
-time_between_sensor_uploads = 20 * 1  
-time_between_image_captures = 10 * 1  # ignore multiple opens in a row  
+time_between_checks = 1  # main loop delay
+time_between_sensor_reads = 5
+time_between_sensor_uploads = 30  
+time_between_image_captures = 10  # ignore multiple opens in a row  
 
 # Variables for door open/close
 open_distance = 25
@@ -117,7 +118,12 @@ temperatures = []
 humidities = []
 
 # Firebase
-firebase = firebase.FirebaseApplication('https://cupboard-culprit.firebaseio.com', None)  # No auth for now
+fbApp = FirebaseApplication('https://cupboard-culprit.firebaseio.com', authentication=None) 
+
+# Firebase Authentication
+authentication = FirebaseAuthentication('kS4ytUh5wSkmMJI7s39VicMqsiDn7ghOj3gDh5TH', 'rseamanrpi@gmail.com')
+fbApp.authentication = authentication
+print (authentication.extra)
 
 while True:
     
@@ -125,7 +131,7 @@ while True:
         
         # Check the distance
         distant = ultrasonicRead(ultasonic_port)
-        print(distant,'cm')
+        #print(distant,'cm')
         
         # Determine hether door is open or closed
         door_open = False
@@ -137,7 +143,7 @@ while True:
             digitalWrite(led_red_port, 0)   # red off
             digitalWrite(led_green_port, 1) # green on            
         
-        print("Door open: %s" % door_open)
+        #print("Door open: %s" % door_open)
         
         # Get the current time        
         curr_time_sec=int(time.time())
