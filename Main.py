@@ -4,6 +4,7 @@ import threading
 import glob
 import math
 import grovepi
+import logging
 from grovepi import *
 from grove_rgb_lcd import *
 from picamera import PiCamera
@@ -11,24 +12,17 @@ from firebase.firebase import FirebaseApplication, FirebaseAuthentication  # aut
 from google.cloud import storage  # uploading images
 from PIL import Image # reducing size of images prior to upload
 
-print("Starting up...")
-        
-# i/o definitions
-
-# Digital
-temp_humidity_port	= 4
-led_red_port = 3
-led_green_port = 2
-ultasonic_port = 5
-buzzer_port = 6
-
-# Set the pin modes
-pinMode(led_green_port, "OUTPUT")
-pinMode(led_red_port, "OUTPUT")
-pinMode(buzzer_port, "OUTPUT")
 
 ###########################################
 # LOCAL FUNCTIONS
+ 
+# Convenience function to both log to file and print to console
+def log(message, is_error):
+    if is_error:
+        logger.error(message)
+    else:        
+        logger.info(message)
+    print(message)        
 
 # Return the path to the folder
 # And create it if it doesn't exist
@@ -46,7 +40,7 @@ def get_folder(folder_name):
     # Create it if it doesn't exist
     if not os.path.isdir(folder_path):
         os.makedirs(folder_path)
-        print(folder_name + " folder created:\n" + folder_path)
+        log(folder_name + " folder created:\n" + folder_path, False)
     # Return the path to the archive folder
     return folder_path
 
@@ -79,7 +73,7 @@ def upload_sensor_readings(temperature, humidity):
     result = fbApp.put('/conditions', timeKey, data)
     
     # Log
-    print("Uploading to firebase:" + str(data))
+    log("Uploading to firebase:" + str(data), False)
     
     return result
 
@@ -94,7 +88,7 @@ def upload_culprit(imageName):
     result = fbApp.put('/culprits', timeKey, data)
     
     # Log
-    print("Uploading to firebase:" + str(data))
+    log("Uploading to firebase:" + str(data), False)
         
     return result
 
@@ -105,7 +99,7 @@ def upload_culprit(imageName):
 # - move original to archive
 def process_image(imagePath):
     # Log
-    print("Processing image: " + imagePath)
+    log("Processing image: " + imagePath, False)
     
     # Create a path for the redcued image
     extension = imagePath.split(".")[1]
@@ -142,7 +136,7 @@ def delete_file_if_old(path):
     if age_in_seconds > delete_after_seconds:
         if os.path.isfile(path):
             os.remove(path)
-            print("Deleted old file: " + path)
+            log("Deleted old file: " + path, False)
 
 # A function intended to be run as a background service
 # Checks for images in the Images folder
@@ -155,11 +149,11 @@ def upload_and_archive_images():
         if stop_daemons:
             break
         
-        print("Checking for images to upload")
+        log("Checking for images to upload", False)
         
         # Check for image files to upload
         images = glob.glob(imageFolder + "/*.jpg")
-        print("Images found: " + str(len(images)))
+        log("Images found: " + str(len(images)), False)
                 
         # Cycle through all of the images in the image folder
         for imagePath in images:
@@ -192,6 +186,31 @@ def set_screen_background(raids):
 # END LOCAL FUNCTIONS
 ###########################################
 
+# Set up logger
+logger = logging.getLogger("CupboardCulprit")
+log_file_name = "CupboardCulprit.log"
+logger_handler = logging.FileHandler(log_file_name)
+logger_formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+logger_handler.setFormatter(logger_formatter)
+logger.addHandler(logger_handler)
+logger.setLevel(logging.INFO)
+
+log("Starting up...", False)
+        
+# i/o definitions
+
+# Digital
+temp_humidity_port	= 4
+led_red_port = 3
+led_green_port = 2
+ultasonic_port = 5
+buzzer_port = 6
+
+# Set the pin modes
+pinMode(led_green_port, "OUTPUT")
+pinMode(led_red_port, "OUTPUT")
+pinMode(buzzer_port, "OUTPUT")
+
 # Variable/Object definition before entering loop
 
 # Time to wait 
@@ -214,13 +233,14 @@ open_distance = 60  # approx 60cm deep
 door_was_open = False
 
 # Variables for camera
-camera_working = False  # convenience flag to prevent program crashing if we know camer ia not working
-print("Attempting to use camera...")
+camera_working = False  # convenience flag to prevent program crashing if we know camera is not working
+log("Attempting to use camera...", False)
 try:
     camera = PiCamera()
     camera_working = True
+    log("Camera is working!", True) 
 except:
-    print("Camera error, image capture and upload disabled.")    
+    log("Camera error, image capture and upload disabled.", True)    
 
 # Variables for average readings
 # Each genuine reading between uploads will be added to this list
@@ -236,13 +256,12 @@ warning_count = 2
 alarm_count = 4
 
 # Firebase App
-print("Initialising Firebase...")
+log("Initialising Firebase...", False)
 fbApp = FirebaseApplication('https://cupboard-culprit.firebaseio.com', authentication=None) 
 
 # Firebase Authentication
 authentication = FirebaseAuthentication('kS4ytUh5wSkmMJI7s39VicMqsiDn7ghOj3gDh5TH', 'rseamanrpi@gmail.com')
 fbApp.authentication = authentication
-print (authentication.extra)
 
 # Google Cloud
 # Enable storage, using local service account json file
@@ -250,8 +269,7 @@ client = storage.Client.from_service_account_json('Cupboard Culprit-900bac054139
 
 # The storage bucket to upload into
 bucket = client.get_bucket('cupboard-culprit.appspot.com')
-print("Images will be uploaded to bucket:")
-print(bucket)
+log("Images will be uploaded to bucket: " + str(bucket), False)
 
 # Local Folders
 imageFolderName = "Images"  # vairable used to ensure same name used below
@@ -319,11 +337,11 @@ while True:
                 if camera_working:
                     # Take the picture
                     saved_image_name = take_picture(camera, imageFolderName)
-                    print("Image saved: " + saved_image_name)
+                    log("Image saved: " + saved_image_name, False)
                     # Upload the image name and timestamp
                     upload_culprit(saved_image_name) 
                 else:
-                    print("Image not saved as camera not working.")
+                    log("Image not saved as camera not working.", False)
                     # Even though no image, we still want a record of it
                     # Front end will check for "0" and handle accordingly
                     upload_culprit(0)                             
@@ -331,7 +349,7 @@ while True:
                 last_image_taken = curr_time_sec
                 last_display_update = curr_time_sec                
             else:
-                print("Ignoring door open, too soon after previous.")
+                log("Ignoring door open, too soon after previous.", False)
                
         # Remember door status for next time
         door_was_open = door_open
@@ -340,7 +358,7 @@ while True:
         if curr_time_sec - last_read_sensor > time_between_sensor_reads:
             [temp, humidity]=read_sensor()
 
-            print(("Time:%s  Temp: %.2f  Humidity:%.2f %%" %(curr_time,temp,humidity)))
+            log(("Time:%s  Temp: %.2f  Humidity:%.2f %%" %(curr_time,temp,humidity)), False)
             
             # Check if readings are genuine and add to list if they are
             if temp != -1 and (temp >= 0.01 or temp <= 0.01):
@@ -381,10 +399,11 @@ while True:
         time.sleep(time_between_checks)
         
     except KeyboardInterrupt:
-        print("Keyboard Interrupt detected, stopping loop...")
+        log("Keyboard Interrupt detected, stopping loop...", False)
         break
     
 # Cleanup
+log("Cleaning up and terminating...", False)
 setText("")
 stop_daemons = True
 digitalWrite(led_red_port, 0)
@@ -393,3 +412,6 @@ digitalWrite(buzzer_port, 0)
 setRGB(0,0,0)  
 if camera_working:
     camera.close
+
+# Archive the log
+os.rename(log_file_name, archiveFolder + "/" + time.strftime("%Y-%m-%d:%H-%M-%S") + " " + log_file_name)
