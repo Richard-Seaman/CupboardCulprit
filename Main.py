@@ -226,7 +226,7 @@ delay_before_picture = 1  # delay between door exceeding open distance and pictu
 
 # Last done times (initialised to allow some to start immediately)
 last_read_sensor = int(time.time()) - time_between_sensor_reads - 1
-last_uploaded_readings = int(time.time())
+last_uploaded_readings = int(time.time()) - time_between_sensor_uploads + 60  # wait 60s before first avg calc and upload
 last_image_taken = int(time.time())
 last_display_update = int(time.time()) - time_between_display_updates - 1
 last_date = datetime.date.today()
@@ -234,6 +234,8 @@ last_date = datetime.date.today()
 # Variables for maindoor open/close
 open_distance = 60  # approx 60cm deep
 door_was_open = False
+door_open_count = 0
+number_of_open_readings_before_action = 3
 
 # Variables for camera
 camera_working = False  # convenience flag to prevent program crashing if we know camera is not working
@@ -316,15 +318,22 @@ while True:
             last_display_update = curr_time_sec
             
         # Determine whether door is open or closed
+        # Note: make sure multiple door opens in a row to rule out scanner error
         door_open = False
         if distant >= open_distance:
-            door_open = True
+	    # Increment the counter and adjust the LEDs
+            door_open_count += 1
             digitalWrite(led_red_port, 1)   # red on
-            digitalWrite(led_green_port, 0) # green off  
-            # Buzzer on if too many opens
-            if daily_count >= alarm_count:          
-                digitalWrite(buzzer_port, 1) # buzzer on            
+            digitalWrite(led_green_port, 0) # green off
+	    # if it's not a false reading (multiple in a row)  
+            if door_open_count >= number_of_open_readings_before_action:
+                door_open = True
+                # Buzzer on if too many opens
+                if daily_count >= alarm_count:          
+                        digitalWrite(buzzer_port, 1) # buzzer on            
         else:
+	    # reset the door open counter
+            door_open_count = 0
             digitalWrite(led_red_port, 0)   # red off
             digitalWrite(led_green_port, 1) # green on            
             digitalWrite(buzzer_port, 0) # buzzer off
