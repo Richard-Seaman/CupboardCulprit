@@ -44,6 +44,13 @@ def get_folder(folder_name):
     # Return the path to the archive folder
     return folder_path
 
+# For programtically creating paths within the same folder
+def get_current_dir():
+    # Get the full path of the current file (__file__ is module attribute)
+    full_path = os.path.realpath(__file__)
+    # Split between directory and file (head and tail)
+    directory, filename = os.path.split(full_path)
+    return directory
 
 # Take a picture and save it in the folder specified
 # Add a timestamp to ensure file name is unique
@@ -189,7 +196,8 @@ def set_screen_background(raids):
 # Set up logger
 logger = logging.getLogger("CupboardCulprit")
 log_file_name = "CupboardCulprit.log"
-logger_handler = logging.FileHandler(log_file_name)
+log_file_path = get_current_dir() + "/" + log_file_name
+logger_handler = logging.FileHandler(log_file_path)
 logger_formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
 logger_handler.setFormatter(logger_formatter)
 logger.addHandler(logger_handler)
@@ -221,8 +229,8 @@ time_between_checks_background = 60  # delay for background loops
 time_between_sensor_reads = 60
 time_between_sensor_uploads = 60 * 15 
 time_between_image_captures = 60  # ignore multiple opens in a row
-time_between_display_updates = 10  # sets minimum time each message shown for
-delay_before_picture = 1  # delay between door exceeding open distance and picture being taken
+time_between_display_updates = 5  # sets minimum time each message shown for
+delay_before_picture = 0  # delay between door exceeding open distance and picture being taken
 
 # Last done times (initialised to allow some to start immediately)
 last_read_sensor = int(time.time()) - time_between_sensor_reads - 1
@@ -232,7 +240,7 @@ last_display_update = int(time.time()) - time_between_display_updates - 1
 last_date = datetime.date.today()
 
 # Variables for maindoor open/close
-open_distance = 60  # approx 60cm deep
+open_distance = 50  # closed distance approx 47cm from testing
 door_was_open = False
 door_open_count = 0
 number_of_open_readings_before_action = 3
@@ -243,7 +251,7 @@ log("Attempting to use camera...", False)
 try:
     camera = PiCamera()
     camera_working = True
-    log("Camera is working!", True) 
+    log("Camera is working!", False) 
 except:
     log("Camera error, image capture and upload disabled.", True)    
 
@@ -270,7 +278,7 @@ fbApp.authentication = authentication
 
 # Google Cloud
 # Enable storage, using local service account json file
-client = storage.Client.from_service_account_json('Cupboard Culprit-900bac054139.json')
+client = storage.Client.from_service_account_json(get_current_dir() + '/Cupboard Culprit-900bac054139.json')
 
 # The storage bucket to upload into
 bucket = client.get_bucket('cupboard-culprit.appspot.com')
@@ -328,9 +336,9 @@ while True:
 	    # if it's not a false reading (multiple in a row)  
             if door_open_count >= number_of_open_readings_before_action:
                 door_open = True
-                # Buzzer on if too many opens
-                if daily_count >= alarm_count:          
-                        digitalWrite(buzzer_port, 1) # buzzer on            
+            # Buzzer on if too many opens
+            if daily_count >= alarm_count:          
+                digitalWrite(buzzer_port, 1) # buzzer on            
         else:
 	    # reset the door open counter
             door_open_count = 0
@@ -355,7 +363,7 @@ while True:
                 if camera_working:
                     # Take the picture (after slight delya to allow door open)
                     time.sleep(delay_before_picture)
-                    saved_image_name = take_picture(camera, imageFolderName)
+                    saved_image_name = take_picture(camera, imageFolder)
                     log("Image saved: " + saved_image_name, False)
                     # Upload the image name and timestamp
                     upload_culprit(saved_image_name) 
@@ -433,4 +441,4 @@ if camera_working:
     camera.close
 
 # Archive the log
-os.rename(log_file_name, archiveFolder + "/" + time.strftime("%Y-%m-%d:%H-%M-%S") + " " + log_file_name)
+os.rename(log_file_path, archiveFolder + "/" + time.strftime("%Y-%m-%d:%H-%M-%S") + " " + log_file_name)
