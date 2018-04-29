@@ -11,6 +11,8 @@ from firebase.firebase import FirebaseApplication, FirebaseAuthentication  # aut
 from google.cloud import storage  # uploading images
 from PIL import Image # reducing size of images prior to upload
 
+print("Starting up...")
+        
 # i/o definitions
 
 # Digital
@@ -53,7 +55,7 @@ def get_folder(folder_name):
 # Add a timestamp to ensure file name is unique
 def take_picture(camera, destination_folder):
     image_file_name = str(time.strftime("%Y-%m-%d %H:%M:%S")) + ".jpg"
-    camera.capture(destination_folder + image_file_name)
+    camera.capture(destination_folder + "/" + image_file_name)
     return image_file_name
 
 # Read the temperature & humidty
@@ -197,14 +199,14 @@ time_between_checks = 1  # main loop delay
 time_between_checks_background = 60  # delay for background loops
 time_between_sensor_reads = 10
 time_between_sensor_uploads = 60  
-time_between_image_captures = 60  # ignore multiple opens in a row
+time_between_image_captures = 20  # ignore multiple opens in a row
 time_between_display_updates = 10  # sets minimum time each message shown for
 
-# Last done times (initialised to now)
-last_read_sensor = int(time.time())
+# Last done times (initialised to allow some to start immediately)
+last_read_sensor = int(time.time()) - time_between_sensor_reads - 1
 last_uploaded_readings = int(time.time())
-last_image_taken = int(time.time())
-last_display_update = int(time.time())
+last_image_taken = int(time.time()) - time_between_image_captures - 1
+last_display_update = int(time.time()) - time_between_display_updates - 1
 last_date = datetime.date.today()
 
 # Variables for maindoor open/close
@@ -212,7 +214,13 @@ open_distance = 60  # approx 60cm deep
 door_was_open = False
 
 # Variables for camera
-camera = PiCamera() 
+camera_working = False  # convenience flag to prevent program crashing if we know camer ia not working
+print("Attempting to use camera...")
+try:
+    camera = PiCamera()
+    camera_working = True
+except:
+    print("Camera error, image capture and upload disabled.")    
 
 # Variables for average readings
 # Each genuine reading between uploads will be added to this list
@@ -228,6 +236,7 @@ warning_count = 2
 alarm_count = 4
 
 # Firebase App
+print("Initialising Firebase...")
 fbApp = FirebaseApplication('https://cupboard-culprit.firebaseio.com', authentication=None) 
 
 # Firebase Authentication
@@ -275,7 +284,7 @@ while True:
         
         # Update the display
         if curr_time_sec - last_display_update > time_between_display_updates:
-            setText("Raids Today: %d\nTemp:%.2f " %(daily_count,current_temperature))
+            setText("Raids Today: %d\nTemp:%.2f C" %(daily_count,current_temperature))
             set_screen_background(daily_count)
             last_display_update = curr_time_sec
             
@@ -284,7 +293,10 @@ while True:
         if distant >= open_distance:
             door_open = True
             digitalWrite(led_red_port, 1)   # red on
-            digitalWrite(led_green_port, 0) # green off            
+            digitalWrite(led_green_port, 0) # green off  
+            # Buzzer on if too many opens
+            if daily_count >= alarm_count:          
+                digitalWrite(buzzer_port, 1) # buzzer on            
         else:
             digitalWrite(led_red_port, 0)   # red off
             digitalWrite(led_green_port, 1) # green on            
@@ -299,18 +311,22 @@ while True:
             # (also used to limit daily increments)
             if curr_time_sec - last_image_taken > time_between_image_captures:   
                 # Increment the counter
-                daily_count += 1
-                # Buzzer on if too many opens
-                if daily_count >= alarm_count:          
-                    digitalWrite(buzzer_port, 1) # buzzer on               
+                daily_count += 1             
                 # Update display
                 setText("Smile Fatty!\nImage captured...")
                 set_screen_background(daily_count)                
-                # Take the picture
-                saved_image_name = take_picture(camera, imageFolderName)
-                print("Image saved: " + saved_image_name)                
-                # Upload the image name and timestamp
-                upload_culprit(saved_image_name)                
+                # Check if the camera is working
+                if camera_working:
+                    # Take the picture
+                    saved_image_name = take_picture(camera, imageFolderName)
+                    print("Image saved: " + saved_image_name)
+                    # Upload the image name and timestamp
+                    upload_culprit(saved_image_name) 
+                else:
+                    print("Image not saved as camera not working.")
+                    # Even though no image, we still want a record of it
+                    # Front end will check for "0" and handle accordingly
+                    upload_culprit(0)                             
                 # Remember the time 
                 last_image_taken = curr_time_sec
                 last_display_update = curr_time_sec                
@@ -373,5 +389,7 @@ setText("")
 stop_daemons = True
 digitalWrite(led_red_port, 0)
 digitalWrite(led_green_port, 0)
-digitalWrite(buzzer_port, 0)    
-camera.close
+digitalWrite(buzzer_port, 0)     
+setRGB(0,0,0)  
+if camera_working:
+    camera.close
