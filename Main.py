@@ -205,26 +205,29 @@ led_red_port = 3
 led_green_port = 2
 ultasonic_port = 5
 buzzer_port = 6
+button_port = 7
 
 # Set the pin modes
 pinMode(led_green_port, "OUTPUT")
 pinMode(led_red_port, "OUTPUT")
 pinMode(buzzer_port, "OUTPUT")
+pinMode(button_port, "INPUT")
 
 # Variable/Object definition before entering loop
 
 # Time to wait 
 time_between_checks = 1  # main loop delay
 time_between_checks_background = 60  # delay for background loops
-time_between_sensor_reads = 10
-time_between_sensor_uploads = 60  
-time_between_image_captures = 20  # ignore multiple opens in a row
+time_between_sensor_reads = 60
+time_between_sensor_uploads = 60 * 15 
+time_between_image_captures = 60  # ignore multiple opens in a row
 time_between_display_updates = 10  # sets minimum time each message shown for
+delay_before_picture = 1  # delay between door exceeding open distance and picture being taken
 
 # Last done times (initialised to allow some to start immediately)
 last_read_sensor = int(time.time()) - time_between_sensor_reads - 1
 last_uploaded_readings = int(time.time())
-last_image_taken = int(time.time()) - time_between_image_captures - 1
+last_image_taken = int(time.time())
 last_display_update = int(time.time()) - time_between_display_updates - 1
 last_date = datetime.date.today()
 
@@ -292,9 +295,15 @@ while True:
         curr_time = time.strftime("%Y-%m-%d:%H-%M-%S")
         curr_date = datetime.date.today()
         
+        # Check the button status
+        button_status = digitalRead(button_port)
+        if button_status:
+            daily_count = 0
+            log("Reset button pressed, setting daily_count to 0.", False)
+        
         # Reset the daily counter if it's the next day
         if curr_date != last_date:
-            daily_counter = 0
+            daily_count = 0
         
         # Check the distance to the cupboard door
         distant = ultrasonicRead(ultasonic_port)
@@ -335,7 +344,8 @@ while True:
                 set_screen_background(daily_count)                
                 # Check if the camera is working
                 if camera_working:
-                    # Take the picture
+                    # Take the picture (after slight delya to allow door open)
+                    time.sleep(delay_before_picture)
                     saved_image_name = take_picture(camera, imageFolderName)
                     log("Image saved: " + saved_image_name, False)
                     # Upload the image name and timestamp
