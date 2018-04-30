@@ -99,6 +99,46 @@ def upload_culprit(imageName):
     log("Uploading to firebase:" + str(data), False)
         
     return result
+  
+# Sync config values
+def sync_config():
+    # Get the config dictionary from Firebase
+    config = fbApp.get('/config', None)
+    
+    # Get config values from dictionary
+    fb_time_between_checks_background = config.get("time_between_checks_background")
+    fb_time_delay_before_picture = config.get("time_delay_before_picture")
+    fb_time_between_sensor_uploads = config.get("time_between_sensor_uploads")
+    fb_time_between_image_captures = config.get("time_between_image_captures")
+    fb_time_between_display_updates = config.get("time_between_display_updates")
+    
+    # Update & Log if differentto current
+    updated = False
+    global time_between_checks_background, time_delay_before_picture, time_between_sensor_uploads, time_between_image_captures, time_between_display_updates
+    if fb_time_between_checks_background != time_between_checks_background:
+        log("Config update: time_between_checks_background = " + str(fb_time_between_checks_background), False)
+        time_between_checks_background = fb_time_between_checks_background
+        updated = True
+    if fb_time_delay_before_picture != time_delay_before_picture:
+        log("Config update: time_delay_before_picture = " + str(fb_time_delay_before_picture), False) 
+        time_delay_before_picture = fb_time_delay_before_picture   
+        updated = True
+    if fb_time_between_sensor_uploads != time_between_sensor_uploads:
+        log("Config update: time_between_sensor_uploads = " + str(fb_time_between_sensor_uploads), False)
+        time_between_sensor_uploads = fb_time_between_sensor_uploads    
+        updated = True
+    if fb_time_between_image_captures != time_between_image_captures:
+        log("Config update: time_between_image_captures = " + str(fb_time_between_image_captures), False)
+        time_between_image_captures = fb_time_between_image_captures    
+        updated = True 
+    if fb_time_between_display_updates != time_between_display_updates:
+        log("Config update: time_between_display_updates = " + str(fb_time_between_display_updates), False)
+        time_between_display_updates = fb_time_between_display_updates   
+        updated = True
+    
+    if updated:
+        setText("Config Updated")
+        last_display_update = int(time.time())
 
 # Process the image
 # - create temporary copy of image at a reduced size
@@ -212,7 +252,7 @@ def interupt_signal_handler(signal, frame):
     # Call the cleanup
     cleanup()
     sys.exit(0)
-
+  
 # END LOCAL FUNCTIONS
 ###########################################
 
@@ -251,21 +291,16 @@ pinMode(button_port, "INPUT")
 
 # Variable/Object definition before entering loop
 
-# Time to wait 
+# Time to wait
+# (defaults before firebase queried)
+time_between_sync_config = 60  # delay between checking for config changes on Firebase
 time_between_checks = 1  # main loop delay
 time_between_checks_background = 60  # delay for background loops
 time_between_sensor_reads = 60
 time_between_sensor_uploads = 60 * 15 
 time_between_image_captures = 60  # ignore multiple opens in a row
 time_between_display_updates = 5  # sets minimum time each message shown for
-delay_before_picture = 0  # delay between door exceeding open distance and picture being taken
-
-# Last done times (initialised to allow some to start immediately)
-last_read_sensor = int(time.time()) - time_between_sensor_reads - 1
-last_uploaded_readings = int(time.time()) - time_between_sensor_uploads + 60  # wait 60s before first avg calc and upload
-last_image_taken = int(time.time())
-last_display_update = int(time.time()) - time_between_display_updates - 1
-last_date = datetime.date.today()
+time_delay_before_picture = 0  # delay between door exceeding open distance and picture being taken
 
 # Variables for maindoor open/close
 open_distance = 50  # closed distance approx 47cm from testing
@@ -304,6 +339,9 @@ fbApp = FirebaseApplication('https://cupboard-culprit.firebaseio.com', authentic
 authentication = FirebaseAuthentication('kS4ytUh5wSkmMJI7s39VicMqsiDn7ghOj3gDh5TH', 'rseamanrpi@gmail.com')
 fbApp.authentication = authentication
 
+# Firebase config values
+sync_config()
+
 # Google Cloud
 # Enable storage, using local service account json file
 client = storage.Client.from_service_account_json(get_current_dir() + '/Cupboard Culprit-900bac054139.json')
@@ -324,6 +362,15 @@ stop_daemons = False  # if set to True, all daemons will exit their infinte loop
 image_processor.daemon = True  # won't prevent the program from terminating if still runnning 
 image_processor.start()  # start the image processing function on a background thread
 
+# Last done times (initialised to allow some to start immediately)
+# Defined after fetching FB config
+last_read_sensor = int(time.time()) - time_between_sensor_reads - 1
+last_uploaded_readings = int(time.time()) - time_between_sensor_uploads + 60  # wait 60s before first avg calc and upload
+last_image_taken = int(time.time())
+last_display_update = int(time.time()) - time_between_display_updates - 1
+last_date = datetime.date.today()
+last_check_config = int(time.time()) # already synced initially above, no need to allow immediately
+
 # Main Loop
 while True:
     
@@ -331,7 +378,7 @@ while True:
         # Get the current day / time        
         curr_time_sec=int(time.time())
         curr_time = time.strftime("%Y-%m-%d:%H-%M-%S")
-        curr_date = datetime.date.today()
+        curr_date = datetime.date.today() 
         
         # Check the button status
         button_status = digitalRead(button_port)
@@ -339,6 +386,11 @@ while True:
             log("Button pressed, gracefully shutting down.", False)
             cleanup()
             os.system("sudo shutdown -h now")
+            
+        # Check for config changes
+        if curr_time_sec - last_check_config > time_between_sync_config:
+            sync_config()
+            last_check_config = curr_time_sec
         
         # Reset the daily counter if it's the next day
         if curr_date != last_date:
@@ -391,7 +443,7 @@ while True:
                 # Check if the camera is working
                 if camera_working:
                     # Take the picture (after slight delya to allow door open)
-                    time.sleep(delay_before_picture)
+                    time.sleep(time_delay_before_picture)
                     saved_image_name = take_picture(camera, imageFolder)
                     log("Image saved: " + saved_image_name, False)
                     # Upload the image name and timestamp
@@ -414,7 +466,7 @@ while True:
         if curr_time_sec - last_read_sensor > time_between_sensor_reads:
             [temp, humidity]=read_sensor()
 
-            log(("Time:%s  Temp: %.2f  Humidity:%.2f %%" %(curr_time,temp,humidity)), False)
+            #log(("Time:%s  Temp: %.2f  Humidity:%.2f %%" %(curr_time,temp,humidity)), False)
             
             # Check if readings are genuine and add to list if they are
             if temp != -1 and (temp >= 0.01 or temp <= 0.01):
