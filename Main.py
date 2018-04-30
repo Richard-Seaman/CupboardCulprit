@@ -5,6 +5,7 @@ import glob
 import math
 import grovepi
 import logging
+import signal, sys
 from grovepi import *
 from grove_rgb_lcd import *
 from picamera import PiCamera
@@ -113,7 +114,7 @@ def process_image(imagePath):
     fileName = imagePath.split("/")[-1]
     imageSmallPath = imagePath.split(".")[0] + "-small." + extension
     
-    # Make a copy of the image which is smaller
+    # Make a copy of the image (which is approximately 98% smaller)
     image = Image.open(imagePath)
     image.thumbnail([500, 500], Image.ANTIALIAS)  # thumbnail maintains aspect ratio                     
     image.save(imageSmallPath, "JPEG")
@@ -188,7 +189,29 @@ def set_screen_background(raids):
     elif raids >= warning_count:    
         setRGB(255,165,0)  # orange
     else:  
-        setRGB(0,255,0)  # green        
+        setRGB(0,255,0)  # green
+        
+# Cleanup
+def cleanup():
+    log("Cleaning up and terminating...", False)
+    setText("")
+    stop_daemons = True
+    digitalWrite(led_red_port, 0)
+    digitalWrite(led_green_port, 0)
+    digitalWrite(buzzer_port, 0)     
+    setRGB(0,0,0)  
+    if camera_working:
+        camera.close
+
+    # Archive the log
+    os.rename(log_file_path, archiveFolder + "/" + time.strftime("%Y-%m-%d:%H-%M-%S") + " " + log_file_name)
+
+# Graceful signal interupt
+def interupt_signal_handler(signal, frame):
+    log("Signal detected: " + str(signal), False)
+    # Call the cleanup
+    cleanup()
+    sys.exit(0)
 
 # END LOCAL FUNCTIONS
 ###########################################
@@ -204,6 +227,11 @@ logger.addHandler(logger_handler)
 logger.setLevel(logging.INFO)
 
 log("Starting up...", False)
+
+# Register the signal interupt handlers
+log("Registering signal interupt handlers...", False)
+for sig in [signal.SIGTERM, signal.SIGINT]:
+    signal.signal(sig, interupt_signal_handler)
         
 # i/o definitions
 
@@ -308,8 +336,9 @@ while True:
         # Check the button status
         button_status = digitalRead(button_port)
         if button_status:
-            daily_count = 0
-            log("Reset button pressed, setting daily_count to 0.", False)
+            log("Button pressed, gracefully shutting down.", False)
+            cleanup()
+            os.system("sudo shutdown -h now")
         
         # Reset the daily counter if it's the next day
         if curr_date != last_date:
@@ -430,15 +459,4 @@ while True:
         break
     
 # Cleanup
-log("Cleaning up and terminating...", False)
-setText("")
-stop_daemons = True
-digitalWrite(led_red_port, 0)
-digitalWrite(led_green_port, 0)
-digitalWrite(buzzer_port, 0)     
-setRGB(0,0,0)  
-if camera_working:
-    camera.close
-
-# Archive the log
-os.rename(log_file_path, archiveFolder + "/" + time.strftime("%Y-%m-%d:%H-%M-%S") + " " + log_file_name)
+cleanup()
