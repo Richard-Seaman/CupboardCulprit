@@ -138,6 +138,7 @@ def sync_config():
     
     if updated:
         setText("Config Updated")
+        set_screen_background(-1)  # blue
         last_display_update = int(time.time())
 
 # Process the image
@@ -148,7 +149,7 @@ def sync_config():
 def process_image(imagePath):
     # Log
     log("Processing image: " + imagePath, False)
-    
+        
     # Create a path for the redcued image
     extension = imagePath.split(".")[1]
     fileName = imagePath.split("/")[-1]
@@ -201,7 +202,14 @@ def upload_and_archive_images():
         
         # Check for image files to upload
         images = glob.glob(imageFolder + "/*.jpg")
-        log("Images found: " + str(len(images)), False)
+        images_count = len(images)
+        log("Images found: " + str(images_count), False)        
+        
+        # Update the display if some found
+        if images_count > 0:
+            setText("Uploading " + str(images_count) +"\nImage(s)")    
+            set_screen_background(-1)  # blue
+            last_display_update = int(time.time())
                 
         # Cycle through all of the images in the image folder
         for imagePath in images:
@@ -223,8 +231,11 @@ def upload_and_archive_images():
 
 # Set the background colour of the display
 # based on the number of raids today
+# if -1, it's being called by an info display (nothing to do with raids, but using same function)
 def set_screen_background(raids):
-    if raids >= alarm_count:        
+    if raids == -1:         
+        setRGB(135,206,250)  # blue 
+    elif raids >= alarm_count:        
         setRGB(255,0,0)  # red
     elif raids >= warning_count:    
         setRGB(255,165,0)  # orange
@@ -413,7 +424,6 @@ while True:
 	    # Increment the counter and adjust the LEDs
             door_open_count += 1
             digitalWrite(led_red_port, 1)   # red on
-            digitalWrite(led_green_port, 0) # green off
 	    # if it's not a false reading (multiple in a row)  
             if door_open_count >= number_of_open_readings_before_action:
                 door_open = True
@@ -423,12 +433,17 @@ while True:
         else:
 	    # reset the door open counter
             door_open_count = 0
-            digitalWrite(led_red_port, 0)   # red off
-            digitalWrite(led_green_port, 1) # green on            
+            digitalWrite(led_red_port, 0)   # red off          
             digitalWrite(buzzer_port, 0) # buzzer off
         
         #print("Door open: %s" % door_open)
-                
+        
+        # Green LED if ready for picture
+        if curr_time_sec - last_image_taken > time_between_image_captures:
+            digitalWrite(led_green_port, 1) # green on   
+        else:
+            digitalWrite(led_green_port, 0) # green off
+            
         # Check if this is the first time the door was opened, since it was closed
         # If so, take a picture and increment the daily count
         if door_open and not door_was_open:                          
