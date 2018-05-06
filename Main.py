@@ -318,6 +318,7 @@ open_distance = 50  # closed distance approx 47cm from testing
 door_was_open = False
 door_open_count = 0
 number_of_open_readings_before_action = 3
+number_of_open_readings_before_buzzer= 2 # to prevent single false reading ounding buzzer (when door closed)
 
 # Variables for camera
 camera_working = False  # convenience flag to prevent program crashing if we know camera is not working
@@ -428,8 +429,10 @@ while True:
             if door_open_count >= number_of_open_readings_before_action:
                 door_open = True
             # Buzzer on if too many opens
-            if daily_count >= alarm_count:          
-                digitalWrite(buzzer_port, 1) # buzzer on            
+            if daily_count >= alarm_count:
+                # ignore false readings
+                if door_open_count >= number_of_open_readings_before_buzzer: 
+                    digitalWrite(buzzer_port, 1) # buzzer on            
         else:
 	    # reset the door open counter
             door_open_count = 0
